@@ -1,0 +1,305 @@
+Ask My Docs Frontend Requirements
+=================================
+
+Purpose
+-------
+Build only the frontend client for the existing backend API. The backend lives under the backend/ directory and exposes document ingestion, document listing, chat, streaming chat, citations, feedback, and evaluation endpoints.
+
+Recommended Stack
+-----------------
+1. React or Next.js with TypeScript.
+2. A lightweight data-fetching layer such as TanStack Query or native fetch wrappers.
+3. A markdown-safe answer renderer. Do not render raw HTML from model answers.
+4. Component library is optional, but the UI should be dense, clean, and operational rather than a marketing landing page.
+
+Backend Base URL
+----------------
+Use an environment variable:
+
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+
+For Vite:
+
+VITE_API_BASE_URL=http://localhost:8000
+
+Development Auth Headers
+------------------------
+Every API call should send:
+
+X-User-Id: local-user
+X-Group-Ids: local
+
+Later these should be replaced by real auth/OIDC tokens and group claims.
+
+Core Screens
+------------
+1. Chat Screen
+   - This should be the default first screen.
+   - User can type a question and submit it.
+   - Show assistant response as it streams from POST /api/chat/stream.
+   - Show clickable citations below or beside the answer.
+   - Show the fallback answer clearly when fallback is true.
+   - Provide thumbs up/down feedback controls after each answer.
+   - Preserve session_id returned by the backend and reuse it for follow-up questions.
+
+2. Document Management Screen
+   - List documents from GET /api/documents.
+   - Show title, source URL, author, chunk count, created date, updated date.
+   - Provide upload control for POST /api/documents/upload.
+   - Provide text ingestion form for POST /api/documents/text.
+   - Provide delete action using DELETE /api/documents/{document_id}.
+   - Provide document detail drawer/page using GET /api/documents/{document_id}.
+   - In document detail, show chunk previews and chunk ids for debugging.
+
+3. Evaluation Screen
+   - Optional for initial UI, but useful for admins.
+   - Allow pasting a JSON list of evaluation cases.
+   - Submit to POST /api/evaluations/run.
+   - Display context_recall, citation_validity, and per-case retrieved chunk ids.
+
+Required API Contracts
+----------------------
+GET /health
+
+Response:
+{
+  "status": "ok",
+  "app": "Ask My Docs Backend",
+  "version": "0.1.0"
+}
+
+POST /api/documents/text
+
+Request:
+{
+  "title": "Handbook",
+  "text": "# Vacation Policy\nEmployees get ...",
+  "source_url": "https://example.com/handbook",
+  "author": "People Team",
+  "metadata": {},
+  "allowed_user_ids": [],
+  "allowed_group_ids": []
+}
+
+Response:
+{
+  "document": {
+    "document_id": "string",
+    "title": "string",
+    "source_url": "string or null",
+    "author": "string or null",
+    "checksum": "string",
+    "chunk_count": 3,
+    "created_at": "ISO timestamp",
+    "updated_at": "ISO timestamp"
+  },
+  "chunks_created": 3,
+  "skipped_unchanged": false
+}
+
+POST /api/documents/upload
+
+Use multipart/form-data with a single field named file.
+Supported local file types: txt, md, markdown, html, htm, pdf, docx.
+
+GET /api/documents
+
+Returns an array of document summary objects.
+
+GET /api/documents/{document_id}
+
+Returns document summary plus:
+{
+  "chunks": [
+    {
+      "chunk_id": "string",
+      "document_id": "string",
+      "chunk_index": 0,
+      "section_title": "string or null",
+      "token_count": 123,
+      "text_preview": "string"
+    }
+  ]
+}
+
+DELETE /api/documents/{document_id}
+
+Response:
+{
+  "deleted": true,
+  "document_id": "string"
+}
+
+POST /api/chat
+
+Request:
+{
+  "question": "What is the vacation policy?",
+  "session_id": "optional existing session id",
+  "top_k": 5,
+  "include_debug": false
+}
+
+Response:
+{
+  "answer": "Employees get ... [Chunk: abc123]",
+  "citations": [
+    {
+      "chunk_id": "string",
+      "document_id": "string",
+      "title": "string",
+      "section_title": "string or null",
+      "source_url": "string or null",
+      "quote": "string"
+    }
+  ],
+  "fallback": false,
+  "session_id": "string",
+  "message_id": "string",
+  "debug": null
+}
+
+POST /api/chat/stream
+
+Request body is the same as POST /api/chat.
+Response content type is application/x-ndjson.
+Each line is JSON.
+
+Token event:
+{
+  "type": "token",
+  "value": "word "
+}
+
+Citations event:
+{
+  "type": "citations",
+  "value": [
+    {
+      "chunk_id": "string",
+      "document_id": "string",
+      "title": "string",
+      "section_title": "string or null",
+      "source_url": "string or null",
+      "quote": "string"
+    }
+  ]
+}
+
+Done event:
+{
+  "type": "done",
+  "message_id": "string",
+  "session_id": "string",
+  "fallback": false
+}
+
+POST /api/feedback
+
+Request:
+{
+  "message_id": "string",
+  "rating": 1,
+  "comment": "optional text"
+}
+
+rating should be 1 for positive, -1 for negative, and 0 for neutral.
+
+Response:
+{
+  "feedback_id": "string",
+  "accepted": true
+}
+
+POST /api/evaluations/run
+
+Request:
+{
+  "cases": [
+    {
+      "query": "What is the vacation policy?",
+      "expected_chunk_ids": ["chunk-id"],
+      "expected_answer": "optional"
+    }
+  ]
+}
+
+Response:
+{
+  "total_cases": 1,
+  "context_recall": 1.0,
+  "citation_validity": 1.0,
+  "results": []
+}
+
+Citation Rendering Requirements
+-------------------------------
+1. Parse citations from the citations array, not only from answer text.
+2. Each citation should show document title, optional section title, and a short quote.
+3. If source_url exists, clicking the citation should open it in a new tab.
+4. If source_url is null, clicking should open local document detail view and highlight the chunk id.
+5. The answer text may contain markers like [Chunk: abc123]. Display them as compact citation badges if possible.
+
+Streaming Requirements
+----------------------
+1. Use fetch with ReadableStream support.
+2. Read newline-delimited JSON events from POST /api/chat/stream.
+3. Append token event values to the visible answer.
+4. Store citations once the citations event arrives.
+5. Finalize loading state when the done event arrives.
+6. Retain session_id and message_id from the done event.
+7. If the stream fails, show a retry action and keep the user's question.
+
+State Requirements
+------------------
+1. Maintain a list of chat messages in memory for MVP.
+2. Persist the latest session_id in local component state.
+3. Refresh document list after upload, text ingestion, or delete.
+4. Store feedback submission status per message_id.
+
+Validation Requirements
+-----------------------
+1. Disable submit when question is empty.
+2. Disable upload when no file is selected.
+3. Show file type errors returned by the backend.
+4. Show backend validation errors in a readable form.
+5. Prevent duplicate submit while a chat request is streaming.
+
+UX Requirements
+---------------
+1. Default screen should be the actual chat interface, not a landing page.
+2. Use a two-pane layout on desktop: chat main area and citations/details side panel.
+3. On mobile, citations should collapse below each answer.
+4. Keep document management available through a clear tab or sidebar item.
+5. Use concise loading states: "Searching documents", "Generating answer", "Saving feedback".
+6. Show fallback answers as normal assistant answers, with no citations.
+7. Show debug retrieval metrics only behind an admin/debug toggle.
+
+Accessibility Requirements
+--------------------------
+1. The question input must have an accessible label.
+2. Streaming updates should use aria-live="polite".
+3. Citation buttons/links must be keyboard reachable.
+4. Feedback buttons must expose selected/submitted state.
+5. Upload controls must be usable by keyboard.
+6. Color must not be the only way to indicate fallback, error, or success.
+
+Error States
+------------
+1. Backend offline.
+2. Empty document collection.
+3. Upload parse failure.
+4. Chat fallback due to insufficient context.
+5. Stream interruption.
+6. Feedback submission failure.
+7. Unauthorized or forbidden document access, when real auth is added.
+
+Future Frontend Enhancements
+----------------------------
+1. Source filters before asking a question.
+2. Admin-only evaluation dashboard.
+3. Query trace viewer showing dense, BM25, fused, and reranked scores.
+4. Saved chat history.
+5. SSO login and user/group display.
+6. Document connector setup screens for Google Drive and Confluence.
+
